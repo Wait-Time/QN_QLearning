@@ -1,24 +1,42 @@
 #include "environment.h"
 
-void environment::perform_action(int64_t action,std::vector<float> prob)
+// float exponentialrv(float lambda)
+// {
+//     float U = random;
+//     return -log(U)/lambda;
+// }
+
+void environment::perform_action(int64_t action,std::vector<float> alpha_list,node new_node)// value for every node)
 {
-    // if(action == 0)
-    //     return ;
-    // else
-    // {
-    //     node_list.push_back(node());
-    //     network.push_back({});
-    //     int64_t i = 0;
-    //     while(action>0)
-    //     {
-    //         if(action%2)
-    //         {
-    //             // network[i].push_back( (int)node_list.size()-1 );
-    //         }
-    //         action/=2;
-    //         i++;
-    //     }
-    // }
+    if(action == 0)
+        return ;
+    else
+    {
+        node_list.push_back(
+           new_node
+        ); // What type of node to initialize Will be fed from a global vector also
+
+        network.push_back({});
+        int64_t i = 0;
+        while(action>0)
+        {
+            if(action%2)
+            {
+                if( !network[i].empty() )
+                {
+                    for(auto&x: network[i])
+                    {
+                        x.second = x.second/(1.00+alpha_list[i]);
+                    }
+                    network[i].push_back( { (int)node_list.size()-1, alpha_list[i]/(1.00+alpha_list[i]) } );
+                }
+                else
+                    network[i].push_back( { (int)node_list.size()-1, 1.00 } );
+            }
+            action/=2;
+            i++;
+        }
+    }
 }
 
 void environment::simulate()
@@ -71,7 +89,7 @@ void environment::simulate()
             simulator.departure_updates(least_station_index,t);
         
         // simulator.logger(t);
-        if(discrete_events%10000==0)
+        if(discrete_events%1000==0)
         {
             std::cout<<"Writing to CSV\n";
             simulator.dump_counter_variable_memory("./graph");
@@ -79,7 +97,39 @@ void environment::simulate()
         discrete_events++;
         // std::cout<<discrete_events<<endl;
     }
+    this->simulated_data = read_csv("graph.csv",8);
     // std::cout<<"Writing to CSV\n";
     // simulator.write_to_csv("./output/graph");
 
+
+}
+
+float environment::reward(std::vector<float> input,float sigma)
+{
+    // Chi-square fitness test possible
+    // Area under curve
+    float tot_var = distribution::area_between_dist( distribution(input, this->b), distribution(this->simulated_data,this->b));
+
+    //Dirac Delta Approximated as Normal
+    return exp( -1*( pow( tot_var,2 )/(2*sigma) ) )/(sigma*sqrt(2*M_PIf64));
+}
+
+void environment::pretty_print_network()
+{
+    //std::vector< std::vector< std::pair<int,float> > > network;      
+    for(int i=0;i<network.size();i++)
+    {   std:: cout << '\n' ;
+        std::cout <<"NODE " << i << ": " ;
+        for(std::pair<int,float> x:network[i]) 
+        {
+            std::cout << "{" << x.first << "," << x.second << "}"  ;
+            if(x!=network[i].back()) 
+                std::cout << "," ;
+        }std::cout << '\n' ;
+    }
+}
+
+int64_t environment::get_size()
+{
+    return network.size();
 }

@@ -63,9 +63,47 @@ public:
             // else
             //     quantiles.push_back( samples[int(k*b/n)+1].first );
         }        
-
     }
     
+    distribution(std::vector<float> data,int b_para)
+    {
+
+        this->b = b_para;
+
+        int n = data.size();
+        std::vector< std::pair<float,float> > samples;
+        for (size_t i = 0; i < n; i++)
+        {
+            samples.push_back( { data[i], 0} );
+        }
+
+        std::sort(samples.begin(),samples.end());
+
+        for (size_t i = 0; i < n; i++)
+        {
+            // std::cout<<samples[i].first <<',';
+            samples[i].second = (i+0.5)/n;
+        }
+        //    0...100 <-> b groups kth b-quantile 
+
+        for (size_t k = 1; k < b; k++)
+        {
+            // ((j-1)-0.5)/n <-> (j-0.5)/n
+            // ((j-1)-0.5)/n <= k*100/b
+            // (k*100/b)
+            int j = int( 1.0*k*n/b + 1.5 );
+            quantiles.push_back( (samples[j-1].first - samples[j].first)/(samples[j-1].second - samples[j].second) * ( 1.0*k/b - samples[j].second ) + samples[j].first );
+
+            // simpler Algo
+            // if( (k*b)%n == 0)
+            // {
+            //     quantiles.push_back( (samples[k*b/n].first + samples[k*b/n+1].first)/2 );
+            // }
+            // else
+            //     quantiles.push_back( samples[int(k*b/n)+1].first );
+        }        
+    }
+
     void print_quantiles()
     {
         std::cout<<'[';
@@ -81,6 +119,17 @@ public:
         int b_para = this->b;
         std::vector<float> quantiles_para = this->quantiles;
         return [b_para,quantiles_para](float t) -> float { float U = random; return quantiles_para[int(b_para*U)]; };
+    }
+
+    static float area_between_dist(distribution A,distribution B)
+    {
+        float res = 0;
+        for (size_t i = 0; i < A.b; i++)
+        {
+            res += abs(A.quantiles[i] - B.quantiles[i]);
+        }
+        res /= A.b;
+        return res;
     }
 };
 
