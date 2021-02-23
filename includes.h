@@ -20,6 +20,7 @@
 #include <chrono>
 #include <algorithm>
 #include <iomanip>
+#include <memory>
 #define float double
 #define precision 7
 #define INF 3 * std::numeric_limits<float>::max()

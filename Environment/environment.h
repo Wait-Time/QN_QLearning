@@ -6,9 +6,11 @@
 #include "../../simulation/components/queue_graphv2.h"
 #include "node.h"
 #include "../includes.h"
+#include <torch/torch.h>
 
 class environment
 {
+public:
     std::vector<distribution> arrival;
     int64_t num_priority;
     int64_t num_events;
@@ -16,7 +18,7 @@ class environment
     std::vector<node> node_list;
     std::vector<float> simulated_data;
     int b; // num-quantiles
-public:
+    
     environment(std::vector<distribution> arrival_par,int64_t num_priority_para, node init_node, int b_para = 1000, int64_t num_events_para=10000): 
     network( { {} } ),node_list( {init_node} )
     {

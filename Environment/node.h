@@ -5,8 +5,11 @@
 
 #include "../distribution.h"
 #include "../../simulation/components/queue_graphv2.h"
+#include <torch/torch.h>
+
 class node
 {
+public:
     // Service dist
     // C func server vs Time
     // Patience times
@@ -16,7 +19,6 @@ class node
     C_type C;
     int mxN;
     int64_t num_priority;
-public:
     node();
     node(int mxN_para,int64_t num_priority_para, C_type C_para,std::vector<distribution> service_para, std::vector<distribution> patience_para)
     {
@@ -27,6 +29,8 @@ public:
         this->patience = patience_para;
     }
     station convert_to_station();
+    torch::Tensor convert_to_tensor();
+    void load_vector(torch::Tensor node_vector);
 };
 
 #endif

@@ -6,23 +6,27 @@ float exponentialrv(float lambda)
     return -log(U)/lambda;
 }
 
-void trainer::init_env()
+void trainer::init_env(float service_rate,float patience_rate,float arrival_rate,int mxN)
 {
     std::vector<distribution> arrival = {};
-    arrival.assign( this->priority_levels, distribution( [](float t)-> float { return exponentialrv(0.14); }, 1000 )  );
+    arrival.assign( this->priority_levels, distribution( [arrival_rate](float t)-> float { return exponentialrv(arrival_rate); }, this->b )  );
     this->env = environment(arrival,this->priority_levels,
-    node(100, 2, [](float t)-> int{ return 100;},
-            { distribution( [](float t)-> float { return exponentialrv(0.14); }, 1000 ), distribution( [](float t)-> float { return exponentialrv(0.16); }, 1000 ) },
-            { distribution( [](float t)-> float { return exponentialrv(0.5); }, 1000 ), distribution( [](float t)-> float { return exponentialrv(0.5); }, 1000 ) }
-          )
+        node(mxN, this->priority_levels, [mxN](float t)-> int{ return mxN;},
+                std::vector<distribution>(this->priority_levels,distribution( [service_rate](float t)-> float { return exponentialrv(service_rate); }, this->b ) ),
+                std::vector<distribution>(this->priority_levels,distribution( [service_rate](float t)-> float { return exponentialrv(service_rate); }, this->b ) )
+                ),
+        this->b,
+        this->num_events
     );
 }
 
 void trainer::train(int64_t num_epochs)
 {
-    this->init_env();
+    this->init_env(1,1,1,1);
     this->env.get_size();
     // [1,2^n-1]
+
+    policy_network.forward( this->env );
 
     for(int i =1; i<=num_epochs;i++)
     {
@@ -30,9 +34,10 @@ void trainer::train(int64_t num_epochs)
         auto r = random;
         // convert state to torch tensor **
         // select action
+        // policy_network.forward()  return a new node, Q_values, alpha_list
         if( r<= epsilon )
         {
-            // select action at random
+            env.perform_action()
         }
         else
         {
@@ -50,6 +55,4 @@ void trainer::train(int64_t num_epochs)
         torch::Tensor loss = this->compute_td_loss();
         
     }
-
-
 }

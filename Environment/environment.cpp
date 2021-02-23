@@ -133,3 +133,16 @@ int64_t environment::get_size()
 {
     return network.size();
 }
+
+torch::Tensor environment::to_pytorch_tensor()
+{
+    // arrival dist
+    // network
+    // node list
+    std::vector<torch::Tensor> node_list;
+    for(auto&x : node_list)
+    {
+        node_list.push_back(x.convert_to_tensor());
+    }
+    at::cat(node_list);
+}

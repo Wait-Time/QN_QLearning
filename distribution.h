@@ -7,17 +7,14 @@
 
 class distribution
 {
-private:
-    int b;
-    int beta;
-    std::vector<float> quantiles;
-    float tol;
 public:
+    int b;
+    std::vector<float> quantiles;
+
     distribution();
-    distribution(int b_para, int beta_para, std::vector<float> quantiles_para)
+    distribution(int b_para, std::vector<float> quantiles_para)
     {
         this->b = b_para;
-        this->beta = beta_para;
         this->quantiles = quantiles_para;
     }
     
@@ -130,6 +127,10 @@ public:
         }
         res /= A.b;
         return res;
+    }
+    torch::Tensor convert_to_tensor()
+    {
+        return torch::tensor(quantiles);
     }
 };
 

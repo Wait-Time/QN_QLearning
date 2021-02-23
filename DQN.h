@@ -5,19 +5,19 @@
 
 #include <torch/torch.h>
 #include "GNN/GNN.h"
+#include "Environment/environment.h"
+
 struct DQN : torch::nn::Module
 {
-    DQN(int64_t node_embedding_size, int64_t edge_embedding_size)
-    {
-        Graph = GNN(node_embedding_size,edge_embedding_size);
-    }
+    DQN(int64_t node_embedding_size, int64_t edge_embedding_size) 
+        : Graph(*register_module<GNN>("GNN", std::make_shared<GNN>(node_embedding_size,edge_embedding_size)))
+    {}
 
-    torch::Tensor forward(torch::Tensor input)//torch::Tensor adj, torch::Tensor wiegths, torch::Tensor nodes) //input graph and action //output scalar q_value
+    torch::Tensor forward(environment env)
     {
-        return Graph.forward(input);
+        return Graph.forward(env.network,env.node_list);
     }
     GNN Graph;
-
 };
 
 #endif

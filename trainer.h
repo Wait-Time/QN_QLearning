@@ -17,16 +17,20 @@ class trainer
     double epsilon_final = 0.01;
     int64_t epsilon_decay = 30000;
     int64_t priority_levels = 1;
+    int b;
+    int num_events = 10000;
 public:
     trainer();
 
-    trainer(int64_t priority_levels_para = 1)
+    trainer(int64_t priority_levels_para = 1,int b_para = 1000)
     {
         this->priority_levels = priority_levels_para;
+        this->b = b_para;
+        policy_network = DQN(2*priority_levels_para*b_para+1,1); // First b entry for service, next b for patience, last for num_servers
+        target_network = DQN(2*priority_levels_para*b_para+1,1);
     }
     
-    void init_env();
-    torch::Tensor state_to_tensor();
+    void init_env(float service_rate,float patience_rate,float arrival_rate,int mxN);
     torch::Tensor compute_td_loss();
     void train(int64_t num_epochs);
 };
