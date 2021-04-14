@@ -37,7 +37,7 @@ void trainer::train(int64_t num_epochs)
         // policy_network.forward()  return a new node, Q_values, alpha_list
         if( r<= epsilon )
         {
-            env.perform_action()
+            env.perform_action();
         }
         else
         {

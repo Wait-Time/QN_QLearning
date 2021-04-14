@@ -40,18 +40,18 @@ void node::load_vector(torch::Tensor node_vector)
 
     for(int i =0; i<this->num_priority;i++)
     {
-        std::vector<float> quantiles{r_ptr+b*i,r_ptr+b*(i+1)};
-        service_temp.push_back(quantile);
+        std::vector<float> quantile{r_ptr+b*i,r_ptr+b*(i+1)};
+        service_temp.push_back(distribution(b,quantile));
     }
     this->service = service_temp;
 
     for(int i =0; i<this->num_priority;i++)
     {
         std::vector<float> quantile{r_ptr+b*this->num_priority+b*i,r_ptr+b*this->num_priority+b*(i+1)};
-        patience_temp.push_back(quantile);
+        patience_temp.push_back(distribution(b,quantile));
     }
     this->patience = patience_temp;
     std::vector<float> C_new{r_ptr+node_vector.size(0)-1,r_ptr+node_vector.size(0)};
     this->mxN = C_new[0];
-    this->C = [C_new](float t)-> int{ return C_new;};
+    this->C = [C_new](float t)-> int{ return C_new[0];};
 }

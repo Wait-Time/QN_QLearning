@@ -9,6 +9,7 @@
 
 struct DQN : torch::nn::Module
 {
+    DQN();
     DQN(int64_t node_embedding_size, int64_t edge_embedding_size) 
         : Graph(*register_module<GNN>("GNN", std::make_shared<GNN>(node_embedding_size,edge_embedding_size)))
     {}

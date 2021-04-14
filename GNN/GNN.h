@@ -16,8 +16,8 @@ public:
     {}
     torch::Tensor forward(torch::Tensor input)
     {
-        input = torch::nn::ReLU(linear1(input));
-        input = torch::nn::ReLU(linear2(input));
+        input = torch::relu(linear1(input));
+        input = torch::relu(linear2(input));
         return input;
     }
     torch::nn::Linear linear1, linear2;
@@ -46,7 +46,9 @@ public:
         }
        
         std::vector<torch::Tensor> a_list;
+
         int T = 100; // HYperParameter
+        
         for(int j =0; j<T;j++)
         {
             for(int i=0;i<N;i++)
@@ -55,15 +57,15 @@ public:
 
                 for(auto& incoming_node: reverse_network[i])
                 {
-                    a += forward_message.forward( at::cat( { node_list[i].convert_to_tensor(), node_list[incoming_node.first].convert_to_tensor(), torch::tensor(incoming_node.second).reshape({1}) } ) );
+                    a += forward_message.forward( at::cat( { node_list[i].convert_to_tensor()[0], node_list[incoming_node.first].convert_to_tensor()[0], torch::tensor(incoming_node.second).reshape({1}) } ) );
                 }
                 for(auto& outgoing_node: network[i])
                 {
-                    a += backward_message.forward( at::cat( { node_list[i].convert_to_tensor(), node_list[outgoing_node.first].convert_to_tensor(), torch::tensor(incoming_node.second).reshape({1}) } ) );
+                    a += backward_message.forward( at::cat( { node_list[i].convert_to_tensor()[0], node_list[outgoing_node.first].convert_to_tensor()[0], torch::tensor(outgoing_node.second).reshape({1}) } ) );
                 }
                 // auto r_ptr = a.data_ptr<float>();
                 // std::vector<float> node_vector{r_ptr,r_ptr+a.size(0)};
-                node_list[i].load_vector(a);
+                node_list[i].load_vector({a});
                 if( j == T-1)
                 {
                     a_list.push_back(a);

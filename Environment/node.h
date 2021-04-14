@@ -30,7 +30,8 @@ public:
     }
     station convert_to_station();
     torch::Tensor convert_to_tensor();
-    void load_vector(torch::Tensor node_vector);
+    void load_vector(std::vector<torch::Tensor> node_vector);
 };
+
 
 #endif

@@ -19,6 +19,8 @@ public:
     std::vector<float> simulated_data;
     int b; // num-quantiles
     
+    environment();
+
     environment(std::vector<distribution> arrival_par,int64_t num_priority_para, node init_node, int b_para = 1000, int64_t num_events_para=10000): 
     network( { {} } ),node_list( {init_node} )
     {
