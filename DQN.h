@@ -10,13 +10,15 @@
 struct DQN : torch::nn::Module
 {
     DQN();
-    DQN(int64_t node_embedding_size, int64_t edge_embedding_size) 
+    DQN(c10::IntArrayRef node_embedding_size, int64_t edge_embedding_size) 
         : Graph(*register_module<GNN>("GNN", std::make_shared<GNN>(node_embedding_size,edge_embedding_size)))
     {}
 
-    torch::Tensor forward(environment env)
+    std::vector<torch::Tensor> forward(std::vector<torch::Tensor> state)
     {
-        return Graph.forward(env.network,env.node_list);
+        state[0].sizes();
+        // State - service tensor {|V|,p,b}, patience_tensor {p,b} ,C_tensor - {|V|}, Adjacency matrix {|V|,|V|}
+        return Graph.forward(state);
     }
     GNN Graph;
 };

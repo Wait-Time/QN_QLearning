@@ -2,9 +2,10 @@ cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 project(pytorch-test)
 
 find_package(Torch REQUIRED)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+SET(GCC_DEBUG_FLAGS "-g")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS} ${GCC_DEBUG_FLAGS}")
 
-add_executable(pytorch-test pytorch-test.cpp ../simulation/components/station.cpp ../simulation/components/queue_graphv2.cpp )
+add_executable(pytorch-test pytorch-test.cpp ../simulation/components/station.cpp ../simulation/components/queue_graphv2.cpp)
 target_link_libraries(pytorch-test "${TORCH_LIBRARIES}")
 set_property(TARGET pytorch-test PROPERTY CXX_STANDARD 14)
 

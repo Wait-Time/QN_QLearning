@@ -12,13 +12,28 @@ public:
     std::vector<float> quantiles;
 
     distribution();
-    distribution(int b_para, std::vector<float> quantiles_para)
+    distribution(std::vector<float> quantiles_para)
     {
-        this->b = b_para;
         this->quantiles = quantiles_para;
+        this->b = quantiles_para.size();
+    }
+    distribution(torch::Tensor quantiles_para) // {b}
+    {
+        // int p = quantiles_para.size(0);
+        int b = quantiles_para.numel(); // check this?
+        float* ptr = (float*)quantiles_para.data_ptr();
+        std::vector<float> quantiles;
+        for(int i =0; i<b ; i++)
+        {
+            quantiles.push_back(*ptr);
+            ptr++;
+        }
+        sort(quantiles.begin(),quantiles.end());
+        this->b = b;
+        this->quantiles = quantiles;
+        this->b = quantiles.size();
     }
     
-
     distribution(event_type sampler,int b_para,int64_t n= 100000)
     {
         this->b = b_para;
@@ -44,7 +59,7 @@ public:
         }
         //    0...100 <-> b groups kth b-quantile 
 
-        for (size_t k = 1; k < b; k++)
+        for (size_t k = 1; k <= b; k++)
         {
             // ((j-1)-0.5)/n <-> (j-0.5)/n
             // ((j-1)-0.5)/n <= k*100/b
@@ -60,11 +75,12 @@ public:
             // else
             //     quantiles.push_back( samples[int(k*b/n)+1].first );
         }        
+        this->b = quantiles.size();
     }
     
     distribution(std::vector<float> data,int b_para)
     {
-
+        
         this->b = b_para;
 
         int n = data.size();
@@ -83,7 +99,7 @@ public:
         }
         //    0...100 <-> b groups kth b-quantile 
 
-        for (size_t k = 1; k < b; k++)
+        for (size_t k = 1; k <= b; k++)
         {
             // ((j-1)-0.5)/n <-> (j-0.5)/n
             // ((j-1)-0.5)/n <= k*100/b
@@ -99,6 +115,7 @@ public:
             // else
             //     quantiles.push_back( samples[int(k*b/n)+1].first );
         }        
+        this->b = quantiles.size();
     }
 
     void print_quantiles()
@@ -111,6 +128,7 @@ public:
         std::cout<<']';
     }
 
+    // A better continous sampler can be constructed
     event_type sampler()
     {
         int b_para = this->b;
@@ -120,8 +138,9 @@ public:
 
     static float area_between_dist(distribution A,distribution B)
     {
+        assert(A.quantiles.size()==B.quantiles.size());
         float res = 0;
-        for (size_t i = 0; i < A.b; i++)
+        for (size_t i = 0; i < A.quantiles.size(); i++)
         {
             res += abs(A.quantiles[i] - B.quantiles[i]);
         }
@@ -130,7 +149,31 @@ public:
     }
     torch::Tensor convert_to_tensor()
     {
-        return torch::tensor(quantiles);
+        int len = quantiles.size();
+        auto options = torch::TensorOptions().dtype(torch::kFloat64);
+        return torch::from_blob(quantiles.data(), {1,len}, options);
+        // return torch::tensor(quantiles.data());
+    }
+    float calc_epsilon()
+    {
+        float epsilon = INF;
+        for(int i=1;i<quantiles.size();i++)
+        {
+            if( epsilon > quantiles[i]-quantiles[i-1])
+                epsilon = quantiles[i] - quantiles[i-1];
+
+        }
+        return epsilon;
+    }
+    void distort(torch::Tensor distortion) // b
+    {
+        float epsilon = calc_epsilon();
+        
+        std::vector<float> distortion_list = convert_tensor<float>(distortion); // -1 to 1
+        for(int i=0;i<quantiles.size();i++)
+        {
+            quantiles[i] += epsilon*distortion_list[i];
+        }
     }
 };
 

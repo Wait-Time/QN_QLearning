@@ -9,11 +9,82 @@ using torch::indexing::Slice;
 using torch::indexing::None;
 using torch::indexing::Ellipsis;
 
+template <class T>
+std::vector<T> convert_tensor(torch::Tensor input)
+{
+    std::vector<T> output;
+    T* ptr = (T*)input.data_ptr();
+    input = input.squeeze();
+    int N = input.numel();
+    for(int i=0;i<N;i++)
+    {
+        output.push_back(*ptr);
+        ptr++;
+    }
+    return output;
+}
+
 float exponentialrv(float lambda)
 {
     float U = random;
     return -log(U)/lambda;
 }
+
+int rand(int a, int b) {
+    return a + rand() % (b - a + 1);
+}
+
+struct tree_output : torch::nn::Module
+{
+public:
+    tree_output();
+    tree_output(int64_t input_size,int64_t output_size)
+    :
+     fl(torch::nn::LinearOptions(50,50)),
+     fr(torch::nn::LinearOptions(50,50)),
+     Q_value(torch::nn::LinearOptions(50,1))
+    {
+        fl->to(torch::kFloat64);
+        fr->to(torch::kFloat64);
+        Q_value->to(torch::kFloat64);
+    }
+    torch::Tensor forward(torch::Tensor input,int64_t depth)
+    {
+        std::vector<torch::Tensor> leaf_nodes( (1<<(depth)),torch::zeros(50,torch::TensorOptions().dtype(torch::kFloat64)) );
+        fl->to(torch::kFloat64);
+        fr->to(torch::kFloat64);
+        Q_value->to(torch::kFloat64);
+        int i = 0;
+        split(input,0,depth,leaf_nodes,i);
+        std::vector<torch::Tensor> Q_list;
+        for(auto& leaf_vector: leaf_nodes)
+        {
+            Q_list.push_back(torch::relu(Q_value->forward(leaf_vector)));
+        }
+        return at::cat(Q_list);
+    }
+
+    void split(torch::Tensor parent,int cur_depth,int max_depth,std::vector<torch::Tensor>& leaf_nodes,int& i)
+    {
+        if( cur_depth == max_depth )
+        {
+            // std::cout<<torch::zeros({1}) <<endl;
+            // std::cout<<"I am at leaf"<<parent <<i <<endl;
+            leaf_nodes[i] = parent;
+            // std::cout<<"I am at leaf"<<parent <<endl;
+            i++;
+            return;
+        }
+        // std::cout<<torch::zeros({1}) <<endl;
+        // std::cout<<"Hello Iam in" <<endl;
+        torch::Tensor left_child = torch::relu(fl->forward(parent));
+        torch::Tensor right_child = torch::relu(fr->forward(parent));
+        split(left_child,cur_depth+1,max_depth,leaf_nodes,i);
+        split(right_child,cur_depth+1,max_depth,leaf_nodes,i);
+    }
+    torch::nn::Linear fl,fr;
+    torch::nn::Linear Q_value;
+};
 
 
 struct fe : torch::nn::Module
@@ -26,7 +97,7 @@ public:
         conv1(torch::nn::Conv2dOptions(3,10,{node_embedding_size[0],1}).padding({node_embedding_size[0],0})),
         conv2(torch::nn::Conv2dOptions(10,100,{node_embedding_size[0],node_embedding_size[1]/2+1})),
         conv3(torch::nn::Conv2dOptions(100,50,{node_embedding_size[0],node_embedding_size[1]/4}).stride({1,node_embedding_size[1]/16})),
-        linear1(torch::nn::LinearOptions(753,50))
+        linear1(torch::nn::LinearOptions(50*3*5+3 ,50))
     {
         conv1->to(torch::kFloat64);
         conv2->to(torch::kFloat64);
@@ -51,6 +122,7 @@ public:
         x = conv1->forward(x);
         x = conv2->forward(x);
         x = conv3->forward(x);
+        // std::cout<<"DIM OF LAST CONV" <<x.sizes();
         x = x.flatten();
 
         torch::Tensor c_ = input[3].to(torch::kFloat64).reshape({2});// not float not differentiable
@@ -77,7 +149,10 @@ public:
           servers(torch::nn::LinearOptions(50,1)),
           gated(torch::nn::LinearOptions(50,1)),
           patience(torch::nn::LinearOptions(50,node_embedding_size[0]*node_embedding_size[1])),
-          Q_value(torch::nn::LinearOptions(50,1))
+          Q_list(*register_module<tree_output>("Q_Values",std::make_shared<tree_output>(50,50))),
+          new_service(torch::nn::LinearOptions(50,node_embedding_size[0]*node_embedding_size[1])),
+          new_C(torch::nn::LinearOptions(50,1))
+
     {
         forward_message.to(torch::kFloat64);
         backward_message.to(torch::kFloat64);
@@ -86,8 +161,9 @@ public:
         alpha->to(torch::kFloat64);
         gated->to(torch::kFloat64);
         patience->to(torch::kFloat64);
-        Q_value->to(torch::kFloat64);
-
+        Q_list.to(torch::kFloat64);
+        new_service->to(torch::kFloat64);
+        new_C->to(torch::kFloat64);
     }
     
     std::vector<torch::Tensor> forward(std::vector<torch::Tensor> input)
@@ -116,7 +192,7 @@ public:
                 {
                     // i->j is connected
                     // j<-i back message
-                    std::cout<<"i,j ->" <<i <<',' <<j <<endl;
+                    // std::cout<<"i,j ->" <<i <<',' <<j <<endl;
 
                     torch::Tensor temp = forward_message.forward({
                         distribution_tensor.index({i,Ellipsis}),
@@ -141,7 +217,8 @@ public:
                 ptr++;
             }
         }
-        std::cout<<a_V<<endl;
+        
+        // std::cout<<a_V<<endl;
         torch::Tensor distribution_tensor_distort = torch::zeros(input[0].sizes(),torch::TensorOptions().dtype(torch::kFloat64));
         torch::Tensor patience_tensor_distort = torch::zeros(input[1].sizes(),torch::TensorOptions().dtype(torch::kFloat64));
         torch::Tensor C_tensor_distort = torch::zeros(input[2].sizes(),torch::TensorOptions().dtype(torch::kFloat64));
@@ -161,7 +238,6 @@ public:
             
         }
         ptr = (float*)node_weights.data_ptr();
-
         torch::Tensor graph_tensor = torch::zeros({50},torch::TensorOptions().dtype(torch::kFloat64));
         for(int i=0;i < V;i++ )
         {
@@ -170,20 +246,25 @@ public:
             ptr++;
         }
         
-        patience_tensor_distort = torch::tanh(patience->forward(graph_tensor));
-        torch::Tensor Q = Q_value->forward(graph_tensor);
-
-
-        // alpha_list 
-        
-        //Perform action ?
-
-        // Q_value
-        
-        return {distribution_tensor_distort,patience_tensor_distort.reshape({p,b}),C_tensor_distort,alpha_list,Q};
+        patience_tensor_distort = torch::tanh(patience->forward(graph_tensor)).reshape({p,b});
+        torch::Tensor Q = Q_list.forward(graph_tensor,V); //{2^n}
+        torch::Tensor C_new = new_C->forward(graph_tensor);
+        torch::Tensor service_new = torch::relu(new_service->forward(graph_tensor)).reshape({p,b});
+        // std::cout<<"Q-list" <<Q <<endl;
+        return 
+        {
+            distribution_tensor_distort,
+            patience_tensor_distort,
+            C_tensor_distort,
+            alpha_list,
+            Q,
+            C_new,
+            service_new
+        };
     }
     fe forward_message, backward_message;
-    torch::nn::Linear service,patience,servers,alpha,Q_value,gated;
+    torch::nn::Linear service,patience,servers,alpha,gated,new_service,new_C;
+    tree_output Q_list;
 };
 
 
@@ -200,7 +281,6 @@ struct DQN : torch::nn::Module
         state[0].sizes();
         // State - service tensor {|V|,p,b}, patience_tensor {p,b} ,C_tensor - {|V|}, Adjacency matrix {|V|,|V|}
         return Graph.forward(state);
-        // return Graph.forward(env.network,env.node_list);
     }
     GNN Graph;
 };
@@ -214,13 +294,28 @@ public:
     std::vector<float> quantiles;
 
     distribution();
-    distribution(int b_para, std::vector<float> quantiles_para)
+    distribution(std::vector<float> quantiles_para)
     {
-        this->b = b_para;
         this->quantiles = quantiles_para;
+        this->b = quantiles_para.size();
+    }
+    distribution(torch::Tensor quantiles_para) // {b}
+    {
+        // int p = quantiles_para.size(0);
+        int b = quantiles_para.numel(); // check this?
+        float* ptr = (float*)quantiles_para.data_ptr();
+        std::vector<float> quantiles;
+        for(int i =0; i<b ; i++)
+        {
+            quantiles.push_back(*ptr);
+            ptr++;
+        }
+        sort(quantiles.begin(),quantiles.end());
+        this->b = b;
+        this->quantiles = quantiles;
+        this->b = quantiles.size();
     }
     
-
     distribution(event_type sampler,int b_para,int64_t n= 100000)
     {
         this->b = b_para;
@@ -246,7 +341,7 @@ public:
         }
         //    0...100 <-> b groups kth b-quantile 
 
-        for (size_t k = 1; k < b; k++)
+        for (size_t k = 0; k < b; k++)
         {
             // ((j-1)-0.5)/n <-> (j-0.5)/n
             // ((j-1)-0.5)/n <= k*100/b
@@ -262,6 +357,7 @@ public:
             // else
             //     quantiles.push_back( samples[int(k*b/n)+1].first );
         }        
+        this->b = quantiles.size();
     }
     
     distribution(std::vector<float> data,int b_para)
@@ -273,9 +369,10 @@ public:
         std::vector< std::pair<float,float> > samples;
         for (size_t i = 0; i < n; i++)
         {
-            samples.push_back( { data[i], 0} );
+            if(data[i]>=0)
+                samples.push_back( { data[i], 0} );
         }
-
+        n = samples.size();
         std::sort(samples.begin(),samples.end());
 
         for (size_t i = 0; i < n; i++)
@@ -285,7 +382,7 @@ public:
         }
         //    0...100 <-> b groups kth b-quantile 
 
-        for (size_t k = 1; k < b; k++)
+        for (size_t k = 0; k < b; k++)
         {
             // ((j-1)-0.5)/n <-> (j-0.5)/n
             // ((j-1)-0.5)/n <= k*100/b
@@ -301,6 +398,7 @@ public:
             // else
             //     quantiles.push_back( samples[int(k*b/n)+1].first );
         }        
+        this->b = quantiles.size();
     }
 
     void print_quantiles()
@@ -313,6 +411,7 @@ public:
         std::cout<<']';
     }
 
+    // A better continous sampler can be constructed
     event_type sampler()
     {
         int b_para = this->b;
@@ -322,9 +421,9 @@ public:
 
     static float area_between_dist(distribution A,distribution B)
     {
-        assert(A.b==B.b);
+        assert(A.quantiles.size()==B.quantiles.size());
         float res = 0;
-        for (size_t i = 0; i < A.b; i++)
+        for (size_t i = 0; i < A.quantiles.size(); i++)
         {
             res += abs(A.quantiles[i] - B.quantiles[i]);
         }
@@ -338,8 +437,29 @@ public:
         return torch::from_blob(quantiles.data(), {1,len}, options);
         // return torch::tensor(quantiles.data());
     }
-};
+    float calc_epsilon()
+    {
+        float epsilon = INF;
+        for(int i=1;i<quantiles.size();i++)
+        {
+            if( epsilon > quantiles[i]-quantiles[i-1])
+                epsilon = quantiles[i] - quantiles[i-1];
 
+        }
+        return epsilon;
+    }
+    void distort(torch::Tensor distortion) // b
+    {
+        float epsilon = calc_epsilon();
+        std::cout<<"Epsilon:" <<epsilon <<endl;
+        std::vector<float> distortion_list = convert_tensor<float>(distortion); // -1 to 1
+        for(int i=0;i<quantiles.size();i++)
+        {
+            quantiles[i] += epsilon*distortion_list[i];
+        }
+        std::sort(quantiles.begin(),quantiles.end());
+    }
+};
 
 
 class node
@@ -379,7 +499,7 @@ public:
         {
             services.push_back(temp.convert_to_tensor()); // size b
         }
-        int b = this->service[0].b-1;
+        int b = this->service[0].b;
         int p = this->num_priority;
         // std::cout<< at::cat(services).sizes();
         torch::Tensor service_tensor = at::cat(services).reshape({p,b});
@@ -411,7 +531,8 @@ public:
         {
             auto r_ptr = services_tensor.index({i,Ellipsis}).data_ptr<float>();
             std::vector<float> quantile{r_ptr,r_ptr+b-1};
-            service_temp.push_back(distribution(b,quantile));
+            // service_temp.push_back(distribution(b,quantile));
+            service_temp.push_back(distribution(quantile));
         }
         this->service = service_temp;
 
@@ -421,6 +542,23 @@ public:
             this->C = [data](float t)-> int{ return data;};
         else
             this->C = [this](float t)-> int{ return this->mxN;};
+    }
+    void distort(std::vector<torch::Tensor> distortions)
+    {
+        torch::Tensor distribution_tensor_distort = distortions[0]; // 1,p,b 
+        torch::Tensor C_tensor_distort = distortions[1]; // 1
+        int p = this->num_priority;
+
+        for(int i =0;i<p;i++)
+        {
+            this->service[i].distort( distribution_tensor_distort.index({i,Ellipsis}) );
+        }
+        float* ptr = (float*)C_tensor_distort.data_ptr();
+        float C_dist = *ptr;
+        int c = this->C(0);
+        int c_ = (c - C_dist*c +1);
+        this->C = [c_](float t)-> int{ return c_;};
+        this->mxN = c_;
     }
 };
 
@@ -496,7 +634,7 @@ public:
 
         // temp.print_system_status(T(t));
         // temp.logger(t);
-        simulator.initialize_CSV("./graph");
+        simulator.initialize_CSV("./temp");
 
         while(discrete_events < num_events)
         {
@@ -520,15 +658,15 @@ public:
                 simulator.departure_updates(least_station_index,t);
             
             // simulator.logger(t);
-            if(discrete_events%1000==0)
+            if(discrete_events%(num_events/100)==0)
             {
-                std::cout<<"Writing to CSV\n";
-                simulator.dump_counter_variable_memory("./graph");
+                // std::cout<<"Writing to CSV\n";
+                simulator.dump_counter_variable_memory("./temp");
             }
             discrete_events++;
             // std::cout<<discrete_events<<endl;
         }
-        this->simulated_data = read_csv("graph.csv",8);
+        this->simulated_data = read_csv("./temp.csv",8);
         // std::cout<<"Writing to CSV\n";
         // simulator.write_to_csv("./output/graph");
     }
@@ -537,10 +675,15 @@ public:
     {
         // Chi-square fitness test possible
         // Area under curve
-        float tot_var = distribution::area_between_dist( distribution(input, this->b), distribution(this->simulated_data,this->b));
+        this->simulate();
+        distribution input_(input, this->b);
+        distribution simulated(this->simulated_data,this->b);
+        float tot_var = distribution::area_between_dist( input_, simulated);
+
+        return 1.0/tot_var;
 
         //Dirac Delta Approximated as Normal
-        return exp( -1*( pow( tot_var,2 )/(2*sigma) ) )/(sigma*sqrt(2*M_PIf64));
+        // return exp( -1*( pow( tot_var,2 )/(2*sigma) ) )/(sigma*sqrt(2*M_PIf64));
     }
     
     void perform_action(int64_t action,std::vector<float> alpha_list,node new_node)
@@ -644,13 +787,39 @@ public:
 
         return {distribution_vector_tensor,patience_tensor,C_vector_tensor,adjacency_matrix_tensor};
     }
+
+    void distort(std::vector<torch::Tensor> distortions)
+    {
+        torch::Tensor distribution_tensor_distort = distortions[0]; // ||V|,p,b 
+        torch::Tensor patience_tensor_distort = distortions[1]; // {p,b}
+        torch::Tensor C_tensor_distort = distortions[2]; // |V|
+        int p = this->num_priority;
+
+
+
+        for(int i =0;i<p;i++)
+        {
+            this->patience[i].distort( patience_tensor_distort.index({i,Ellipsis}) );
+        }
+
+        for(int i =0;i<this->get_size();i++)
+        {
+            this->node_list[i].distort({
+                distribution_tensor_distort.index({i,Ellipsis}),
+                C_tensor_distort.index({i,Ellipsis})
+            });
+        }
+
+    }
 };
 
 class trainer
 {
     environment env;
+    environment env_init;
     DQN policy_network, target_network;
     // Optimizer
+    torch::optim::Adam dqn_optimizer;
     float gamma = 0.99;
     double epsilon_start = 1.0;
     double epsilon_final = 0.01;
@@ -662,11 +831,13 @@ public:
     trainer();
 
     trainer(environment env_init,int64_t priority_levels_para = 1,int b_para = 1000)
-        : policy_network({priority_levels_para,b_para-1},1),
-          target_network({priority_levels_para,b_para-1},1),
+        : policy_network({priority_levels_para,b_para},1),
+          target_network({priority_levels_para,b_para},1),
           b(b_para),
           priority_levels(priority_levels_para),
-          env(env_init)
+          env(env_init),
+          env_init(env_init),
+          dqn_optimizer(policy_network.parameters(true), 0.001)
     {}
     
     void init_env(float service_rate,float patience_rate,float arrival_rate,int mxN)
@@ -684,46 +855,173 @@ public:
             this->b,
             this->num_events
         );
+        this->env_init = this->env;
+    }
+    void init_env(std::vector<distribution> arrival,std::vector<distribution> patience,node init_node)
+    {
+        this->env = environment(arrival,this->priority_levels,
+            init_node,
+            patience,
+            true,
+            this->b,
+            this->num_events
+        );
+        this->env_init = this->env;
     }
 
-    torch::Tensor compute_td_loss();
+    torch::Tensor compute_td_loss(std::vector<torch::Tensor> state, std::vector<torch::Tensor> new_state, torch::Tensor reward,int action,bool done)
+    {
+        torch::Tensor q_values = policy_network.forward(state)[4];
+        torch::Tensor next_target_q_values = target_network.forward(new_state)[4];
+        torch::Tensor next_q_values = policy_network.forward(new_state)[4];
 
-    void train(int64_t num_epochs)
+        torch::Tensor q_value = q_values.index({action});
+        // torch::Tensor maximum = std::get<1>(next_q_values.max(1));
+        std::vector<float> Q_list = convert_tensor<float>(next_q_values);
+        int max = max_element(Q_list.begin(),Q_list.end()) - Q_list.begin(); 
+        torch::Tensor next_q_value = next_target_q_values.index({max});
+        torch::Tensor expected_q_value = reward + gamma*next_q_value*(1-int(done));
+        torch::Tensor loss = torch::mse_loss(q_value, expected_q_value);
+
+        dqn_optimizer.zero_grad();
+        loss.backward();
+        dqn_optimizer.step();
+
+        return loss;
+    }
+
+    void loadstatedict(torch::nn::Module& model,torch::nn::Module& target_model) 
+    {
+        torch::autograd::GradMode::set_enabled(false);  // make parameters copying possible
+        auto new_params = target_model.named_parameters(); // implement this
+        auto params = model.named_parameters(true /*recurse*/);
+        auto buffers = model.named_buffers(true /*recurse*/);
+        for (auto& val : new_params) 
+        {
+            auto name = val.key();
+            auto* t = params.find(name);
+            if (t != nullptr) 
+            {
+                t->copy_(val.value());
+            } 
+            else 
+            {
+                t = buffers.find(name);
+                if (t != nullptr) 
+                {
+                    t->copy_(val.value());
+                }
+            }
+        }
+        torch::autograd::GradMode::set_enabled(true);
+    }
+
+    void train(int64_t num_epochs,int max_size)
     {
         // this->init_env(1,1,1,10); // is Environment empty????
-        this->env.get_size();
-
-        this->policy_network.forward(this->env.state_to_tensor());
 
         // start training
 
+        float episode_reward = 0.0;
+        std::vector<float> all_rewards;
+        std::vector<torch::Tensor> losses;
+
         for(int i =1; i<=num_epochs;i++)
         {
-            double epsilon; //= decay
+            std::cout<<"++++++++++++++++++++++++++++++++==== EPOCH:" <<i <<"=======++++++++++++++++++++"<<endl;
+            int V = this->env.get_size();
+            std::vector<torch::Tensor> state_tensor = this->env.state_to_tensor();
+
+            std::vector<torch::Tensor> output = this->policy_network.forward(state_tensor);
+
+            torch::Tensor distribution_tensor_distort = output[0];
+            torch::Tensor patience_tensor_distort = output[1];
+            torch::Tensor C_tensor_distort = output[2];
+
+            torch::Tensor alpha_list = output[3];
+
+            torch::Tensor Q = output[4];
+
+            torch::Tensor C_new = output[5];
+            torch::Tensor service_new = output[6];
+
+            std::vector<distribution> new_services;
+            float* ptr = (float*)C_new.data_ptr();
+            int c_new = ( (int)(*ptr) > 0) ? (int)(*ptr) : 1;
+            for(int i =0;i<this->priority_levels;i++)
+            {
+                new_services.push_back(distribution(service_new.index({i,Ellipsis})));
+            }
+            // std::cout<<"CNEW:" <<c_new <<endl;
+            node new_node(
+                c_new,
+                this->priority_levels,
+                [c_new](float t)-> int{ return c_new;},
+                new_services
+            );
+
+            double epsilon = epsilon_final + (epsilon_start - epsilon_final) * exp(-1. * i / epsilon_decay); //= decay
             auto r = random;
-            // convert state to torch tensor **
-            // select action
-            // policy_network.forward()  return a new node, Q_values, alpha_list
+            int action;
             if( r<= epsilon )
             {
-                env.perform_action();
+                action = rand() % rand(1,(1<<V) );
+                std::cout<<"Random Action was taken.\n";
             }
             else
             {
                 // select action with q_max
-                policy_network.forward(this->env.state_to_tensor()); // -> Returns Q_Value
+                std::vector<float> Q_list = convert_tensor<float>(Q);
+                action = max_element(Q_list.begin(),Q_list.end()) - Q_list.begin(); 
             }
-            //this->env.perform_action(action,alpha_list,new_node);
-            //  float reward = this->env.reward(//file read);
 
-            bool done;
+            // Distort states too
+            
+            env.distort(
+                {
+                    distribution_tensor_distort,
+                    patience_tensor_distort,
+                    C_tensor_distort
+                }
+            );
+
+            std::cout<<"Action:" <<action;
+            env.perform_action(action,convert_tensor<float>(alpha_list),new_node);
+            env.pretty_print_network();
+
+            std::vector<torch::Tensor> new_state = env.state_to_tensor();
+            
+            float reward = this->env.reward(read_csv("../MM1.csv",8));
+            all_rewards.push_back(reward);
+            episode_reward+= reward;
+            bool done = env.get_size() == max_size ;
+
+            torch::Tensor reward_tensor = torch::tensor(reward);
+            // torch::Tensor done_tensor = torch::tensor(done);
+            // done_tensor = done_tensor.to(torch::kFloat32);
+            // torch::Tensor action_tensor_new = torch::tensor(action);
+            std::cout<<"Reward: " <<reward_tensor <<endl;
+
             if(done)
             {
-                this->init_env(1,1,1,100);
+                // this->init_env(env.arrival,env.patience,new_node);
+                this->env = this->env_init;
+                episode_reward = 0.0;
+                std::cout<<"++++++++++++++++++++++++++++++++++=RESET+++++++++++++++++++++++++++++++++++++++\n";
             }
-            torch::Tensor loss = this->compute_td_loss();
-            
+
+            torch::Tensor loss = compute_td_loss(state_tensor,new_state,reward_tensor,action,done);
+            losses.push_back(loss);
+            std::cout<<"Loss" <<loss <<endl;
+
+            if (i%10==0)
+            {
+                std::cout<<episode_reward<<endl;
+                loadstatedict(policy_network, target_network);
+            }
         }
+        std::cout<<"Reward:\n" <<all_rewards<<endl;
+        std::cout<<"Loss:\n" <<losses<<endl;
 
     }
 };
@@ -732,6 +1030,8 @@ public:
 
 int main() 
 {
+    srand(time(0));
+
   // trainer.cpp Environment/environment.cpp Environment/node.cpp  ../../nixonz/simulation/components/station.cpp ../../nixonz/simulation/components/tandem.cpp ../../nixonz/simulation/components/queue_graphv2.cpp
 
   // torch::Tensor tensor = torch::rand({2});
@@ -757,25 +1057,27 @@ int main()
 
   // b_max = 100001
 
-  
+    int b = 32;
+    // distribution exponential(  [](float t)-> float { return exponentialrv(2); }, b );
+    // exponential.print_quantiles();
+    // std::cout<<endl;
+    // std::cout<<exponential.convert_to_tensor() <<endl;
+    // std::cout<<torch::zeros({1}) <<endl;
 
-  
-//   distribution exponential(  [](float t)-> float { return exponentialrv(2); }, 100001  );
-
-
-    int b = 1025;
-
-
-//   distribution lognormal( read_csv("../lognormal.csv",3), b );
-// //   torch::Tensor tensor = exponential.convert_to_tensor();
-// //   torch::Tensor tensor = lognormal.convert_to_tensor();
+    // distribution lognormal( read_csv("../lognormal.csv",3), b );
+    // lognormal.print_quantiles();
+    // std::cout<<endl;
+    // std::cout<<lognormal.convert_to_tensor() <<endl;
+    // std::cout<<torch::zeros({1}) <<endl;
+//   torch::Tensor tensor = exponential.convert_to_tensor();
+//   torch::Tensor tensor = lognormal.convert_to_tensor();
 
 
 
-//     // std::vector<distribution> arrival = { 
-//     //     distribution( [](float t)-> float { return exponentialrv(0.14); }, b ), 
-//     //     distribution( [](float t)-> float { return exponentialrv(0.5); }, b ) 
-//     // };
+    // std::vector<distribution> arrival = { 
+    //     distribution( [](float t)-> float { return exponentialrv(0.14); }, b ), 
+    //     distribution( [](float t)-> float { return exponentialrv(0.5); }, b ) 
+    // };
 
     node station = node(100, 2, [](float t)-> int{ return 100;},
             { distribution( [](float t)-> float { return exponentialrv(0.14); }, b ), distribution( [](float t)-> float { return exponentialrv(0.16); }, b ) }
@@ -819,60 +1121,62 @@ int main()
 
 // //  testing Environment
     std::vector<distribution> arrival = { 
-            distribution( [](float t)-> float { return exponentialrv(0.14); }, b ), 
-            distribution( [](float t)-> float { return exponentialrv(0.5); }, b ) 
+            distribution( [](float t)-> float { return exponentialrv(0.09); }, b ), 
+            distribution( [](float t)-> float { return exponentialrv(0.06); }, b ) 
         };
     std::vector<distribution> patience = { 
         distribution( [](float t)-> float { return exponentialrv(0.5); }, b ), 
         distribution( [](float t)-> float { return exponentialrv(0.5); }, b ) 
         };
-    environment env(arrival,2,station,patience,true,b);
+    environment env(arrival,2,station,patience,true,b,10000);
 
     std::vector<torch::Tensor> tensor = env.state_to_tensor();
 
-    std::cout<< "==============================" <<endl;
-    std::cout<< tensor[0].sizes() <<endl ;  // services
-    std::cout<< tensor[1].sizes() <<endl; // patience
-    std::cout<< tensor[2].sizes() <<endl ; // C_servers
-    std::cout<< tensor[3].sizes() <<endl ; // Adjacency matrix
-    std::cout<<"[0,0,:]: " << tensor[0].index({0,0,Slice()}).mean() <<endl ;
-    std::cout<<"[0,..]: " << tensor[0].index({0,Ellipsis}).sizes() <<endl ;
-    std::cout<<"Patience: " << tensor[1].index({0,Ellipsis}).mean() <<endl ;
-    std::cout<<"C :" <<tensor[2] <<endl;
-    std::cout<< tensor[0].index({0,0,Slice()}).std() <<endl ;
+    // std::cout<< "==============================" <<endl;
+    // std::cout<< tensor[0].sizes() <<endl ;  // services
+    // std::cout<< tensor[1].sizes() <<endl; // patience
+    // std::cout<< tensor[2].sizes() <<endl ; // C_servers
+    // std::cout<< tensor[3].sizes() <<endl ; // Adjacency matrix
+    // std::cout<<"[0,0,:]: " << tensor[0].index({0,0,Slice()}).mean() <<endl ;
+    // std::cout<<"[0,..]: " << tensor[0].index({0,Ellipsis}).sizes() <<endl ;
+    // std::cout<<"Patience: " << tensor[1].index({0,Ellipsis}).mean() <<endl ;
+    // std::cout<<"C :" <<tensor[2] <<endl;
+    // std::cout<< tensor[0].index({0,0,Slice()}).std() <<endl ;
 
-    std::cout<< "Adjacency Matrix" <<endl;
-    std::cout<< tensor[3] <<endl;
-    std::cout<< "Service tensor" <<endl;
-    // std::cout<< tensor[0] <<endl;
+    // std::cout<< "Adjacency Matrix" <<endl;
+    // std::cout<< tensor[3] <<endl;
+    // std::cout<< "Service tensor" <<endl;
+    // // std::cout<< tensor[0] <<endl;
+    // int reward = env.reward(read_csv("../graph.csv",8));
+    // std::cout<<"Reward:" <<reward <<endl;
 
-    env.perform_action(1,{1},
-        node(100, 2, [](float t)-> int{ return 100;},
-            { distribution( [](float t)-> float { return exponentialrv(0.14); }, b ), distribution( [](float t)-> float { return exponentialrv(0.16); }, b ) }
-          )
-    );
-    env.perform_action(3,{0.9,1},
-        node(1, 2, [](float t)-> int{ return 1;},
-            { distribution( [](float t)-> float { return exponentialrv(0.5); }, b ), distribution( [](float t)-> float { return exponentialrv(0.16); }, b ) }
-          )
-    );
+    // env.perform_action(1,{1},
+    //     node(100, 2, [](float t)-> int{ return 100;},
+    //         { distribution( [](float t)-> float { return exponentialrv(0.14); }, b ), distribution( [](float t)-> float { return exponentialrv(0.16); }, b ) }
+    //       )
+    // );
+    // env.perform_action(3,{0.9,1},
+    //     node(1, 2, [](float t)-> int{ return 1;},
+    //         { distribution( [](float t)-> float { return exponentialrv(0.5); }, b ), distribution( [](float t)-> float { return exponentialrv(0.16); }, b ) }
+    //       )
+    // );
 
     tensor = env.state_to_tensor();
 
-    std::cout<< "==============================" <<endl;
-    std::cout<< tensor[0].sizes() <<endl ;  // services
-    std::cout<< tensor[1].sizes() <<endl; // patience
-    std::cout<< tensor[2].sizes() <<endl ; // C_servers
-    std::cout<< tensor[3].sizes() <<endl ; // Adjacency matrix
-    std::cout<<"[0,0,:]: " << tensor[0].index({0,0,Slice()}).mean() <<endl ;
-    std::cout<<"[0,..]: " << tensor[0].index({0,Ellipsis}).sizes() <<endl ;
-    std::cout<<"Patience: " << tensor[1].index({0,Ellipsis}).mean() <<endl ;
-    std::cout<<"C :" <<tensor[2] <<endl;
-    std::cout<< tensor[0].index({0,0,Slice()}).std() <<endl ;
+    // std::cout<< "==============================" <<endl;
+    // std::cout<< tensor[0].sizes() <<endl ;  // services
+    // std::cout<< tensor[1].sizes() <<endl; // patience
+    // std::cout<< tensor[2].sizes() <<endl ; // C_servers
+    // std::cout<< tensor[3].sizes() <<endl ; // Adjacency matrix
+    // std::cout<<"[0,0,:]: " << tensor[0].index({0,0,Slice()}).mean() <<endl ;
+    // std::cout<<"[0,..]: " << tensor[0].index({0,Ellipsis}).sizes() <<endl ;
+    // std::cout<<"Patience: " << tensor[1].index({0,Ellipsis}).mean() <<endl ;
+    // std::cout<<"C :" <<tensor[2] <<endl;
+    // std::cout<< tensor[0].index({0,0,Slice()}).std() <<endl ;
 
-    std::cout<< "Adjacency Matrix" <<endl;
-    std::cout<< tensor[3] <<endl;
-    std::cout<< "Service tensor" <<endl;
+    // std::cout<< "Adjacency Matrix" <<endl;
+    // std::cout<< tensor[3] <<endl;
+    // std::cout<< "Service tensor" <<endl;
     // std::cout<< tensor[0] <<endl;
 
     torch::Tensor adjacency_matrix = tensor[2];
@@ -894,8 +1198,10 @@ int main()
     //     }
 
 std::cout<< "==============================" <<endl;
+    // env.simulate();
+    // torch::manual_seed(432);
     trainer model(env,2,b);
-    model.train(1);
+    model.train(10000,4);
     // CODE
 }
 // distribution: - <b> dim = {b,1}
